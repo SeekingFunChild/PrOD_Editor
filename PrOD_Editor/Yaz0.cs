@@ -12,18 +12,19 @@ namespace PrOD_Editor
         {
             //find need compressed position
             uint curPos = 0;
+            uint endPos = (uint)src.Length;
             List<KeyValuePair<uint, KeyValuePair<uint, uint>>> finds = new List<KeyValuePair<uint, KeyValuePair<uint, uint>>>();
-            while(curPos<src.Length)
+            while(curPos+0x03<=endPos)
             {
-                var find = searchBefore(src, curPos);
-                if(find.Value.Value!=0)
+                var find = searchNextNCPoses(src,curPos,endPos);
+                if(find[0].Value.Value!=0)
                 {
-                    finds.Add(find);      
+                    finds.AddRange(find);      
                 }
-                curPos = find.Key + find.Value.Value;
+                curPos = find[find.Count-1].Key + find[find.Count-1].Value.Value;
             }
 
-            //compressed
+            //compress
             byte[] temp = new byte[src.Length+src.Length/8];
             uint writeLen = 0;
             uint srcPos = 0;
@@ -32,8 +33,8 @@ namespace PrOD_Editor
             uint cycle = 0x00;
             foreach(var find in finds)
             {
-                //write not need compressed data
-                while(srcPos<find.Key)
+                //write data that does not need to be compressed 
+                while (srcPos<find.Key)
                 {
                     if (cycle == 8)
                     {
@@ -49,7 +50,7 @@ namespace PrOD_Editor
                     srcPos++;
                 }
 
-                //write need compressed data
+                //write data that need to compressed
                 if (cycle == 8)
                 {
                     opcodePos = dstPos;
@@ -86,7 +87,7 @@ namespace PrOD_Editor
                 srcPos += findLen;
             }
 
-            //write not need compressed data
+            //write data that does not need to be compressed 
             while (srcPos < src.Length)
             {
                 if (cycle == 8)
@@ -116,29 +117,30 @@ namespace PrOD_Editor
             return ret;
         }
 
-        private static KeyValuePair<uint, KeyValuePair<uint, uint>> searchBefore(byte[] bytes,uint curPos)
+        private static List<KeyValuePair<uint, KeyValuePair<uint, uint>>> searchNextNCPoses(byte[] bytes,uint curPos,uint endPos)
         {
-            List<KeyValuePair<uint, KeyValuePair<uint, uint>>> finds = new List<KeyValuePair<uint, KeyValuePair<uint, uint>>>();
 
-            int offset = 0;
-            while(curPos+offset+3<bytes.Length)
+            uint offset = 0;
+
+            //find first position that has match  start from curPos
+            byte[] sign = new byte[3];
+            List<uint> matchedPoses = new List<uint>();
+            while (curPos+offset+3<=endPos)
             {
-                byte[] sign = new byte[3];
                 for (int i = 0; i < 3; i++)
                 {
                     sign[i] = bytes[curPos + offset + i];
                 }
 
-                int findPos = -1;
-                if(curPos+(uint)offset<0x0FFF)
+                if(curPos+offset<0x0FFF)
                 {
-                    findPos = sundaySearch(bytes, 0, curPos + (uint)offset, sign);
+                    matchedPoses= sundaySearch(bytes, 0, curPos + offset, sign);
                 }
                 else
                 {
-                    findPos = sundaySearch(bytes, curPos + (uint)offset - 0x0FFF, curPos + (uint)offset, sign);
+                    matchedPoses = sundaySearch(bytes, curPos + offset - 0x0FFF, curPos + offset, sign);
                 }
-                if(findPos!=-1)
+                if(matchedPoses.Count!=0)
                 {
                     break;
                 }
@@ -146,67 +148,37 @@ namespace PrOD_Editor
                 offset++;
             }
 
-            for(int i=0;i<0x03;i++)
+            List<KeyValuePair<uint, KeyValuePair<uint, uint>>> finds = new List<KeyValuePair<uint, KeyValuePair<uint, uint>>>();
+            uint t_pos = curPos + offset;
+            finds.Add(new KeyValuePair<uint, KeyValuePair<uint, uint>>(t_pos,getLongestMatch(bytes,t_pos,0x03)));
+            t_pos = curPos + offset+1;
+            if(t_pos+0x3<=endPos)
             {
-                for (int len = 0x03; len < 0xFF + 0x12; len++)
+                var retMatch = getLongestMatch(bytes, t_pos, finds.Last().Value.Value);
+                if(retMatch.Value!=0)
                 {
-                    if (curPos + len + offset+i > bytes.Length)
-                    {
-                        break;
-                    }
-
-                    byte[] sign = new byte[len];
-
-                    for (int j = 0; j < len; j++)
-                    {
-                        sign[j] = bytes[curPos + offset +i+ j];
-                    }
-
-                    int findPos = -1;
-                    if (curPos + (uint)offset < 0x0FFF)
-                    {
-                        findPos = sundaySearch(bytes, 0, curPos + (uint)offset+(uint)i, sign);
-                    }
-                    else
-                    {
-                        findPos = sundaySearch(bytes, curPos + (uint)offset - 0x0FFF, curPos + (uint)offset+(uint)i, sign);
-                    }
-
-                    if (findPos != -1)
-                    {
-                          finds.Add(new KeyValuePair<uint, KeyValuePair<uint, uint>>((uint)(curPos + offset + i), new KeyValuePair<uint, uint>((uint)findPos, (uint)len)));
-                    }
-                    else
-                    {
-                        break;
-                    }
+                    finds.Add(new KeyValuePair<uint, KeyValuePair<uint, uint>>(t_pos, retMatch));
                 }
             }
 
-            if(finds.Count>0)
-            {
-                finds.Sort(delegate(KeyValuePair<uint, KeyValuePair<uint, uint>> k1, KeyValuePair<uint, KeyValuePair<uint, uint>> k2) {
-                    uint p1 = k1.Value.Value;
-                    uint p2 = k2.Value.Value-(k2.Key-k1.Key);
-                    if(p1==p2)
-                    {
-                        uint pos1 = k1.Key;
-                        uint pos2 = k2.Key;
-                        if (pos1 == pos2)
-                        {
-                            return 0;
-                        }
-                        else if (pos1 > pos2)
-                        {
-                            return -1;
-                        }
-                        else
-                        {
-                            return 1;
-                        }
-                    }
+            List<KeyValuePair<uint, KeyValuePair<uint, uint>>> ret = new List<KeyValuePair<uint, KeyValuePair<uint, uint>>>();
+            finds.Sort(delegate (KeyValuePair<uint, KeyValuePair<uint, uint>> k1, KeyValuePair<uint, KeyValuePair<uint, uint>> k2) {
+                uint p1 = 0;
+                uint p2 = 0;
 
-                    if (p1<p2)
+                p1 = k1.Value.Value;
+                p2 = k2.Value.Value-(k2.Key-k1.Key);
+
+                if (p1 == p2)
+                {
+                    uint pos1 = k1.Key;
+                    uint pos2 = k2.Key;
+
+                    if (pos1 == pos2)
+                    {
+                        return 0;
+                    }
+                    else if (pos1 > pos2)
                     {
                         return -1;
                     }
@@ -214,16 +186,70 @@ namespace PrOD_Editor
                     {
                         return 1;
                     }
-                });
-                return finds[finds.Count - 1];
+                }
+                if (p1 < p2)
+                {
+                    return -1;
+                }
+                else
+                {
+                    return 1;
+                }
+            });
+
+            ret.Add(finds.Last());
+              
+            return ret;
+        }
+
+        private static KeyValuePair<uint, uint>  getLongestMatch(byte[] bytes,uint curPos,uint length)
+        {
+            byte[] sign = new byte[length];
+            List<uint> matchedPoses = new List<uint>();
+            List<KeyValuePair<uint, uint>> matches = new List<KeyValuePair<uint, uint>>();
+
+            for (int i = 0; i < length; i++)
+            {
+                sign[i] = bytes[curPos + i];
+            }
+            if (curPos < 0x0FFF)
+            {
+                matchedPoses = sundaySearch(bytes, 0, curPos, sign);
             }
             else
             {
-                return new KeyValuePair<uint, KeyValuePair<uint, uint>>((uint)(curPos+offset+3), new KeyValuePair<uint, uint>(0, 0));
+                matchedPoses = sundaySearch(bytes, curPos - 0x0FFF, curPos, sign);
             }
+            //calculate each matched length in matched pos
+            foreach (var pos in matchedPoses)
+            {
+                matches.Add(new KeyValuePair<uint, uint>(pos, calLength(bytes, pos, curPos)));
+            }
+            //sort by length
+            matches.Sort(delegate (KeyValuePair<uint, uint> p1, KeyValuePair<uint, uint> p2)
+            {
+                if (p1.Value == p2.Value)
+                {
+                    return 0;
+                }
+                else if (p1.Value > p2.Value)
+                {
+                    return 1;
+                }
+                else
+                {
+                    return -1;
+                }
+            });
+
+            if(matches.Count==0)
+            {
+                return new KeyValuePair<uint, uint>(0, 0);
+            }
+            return matches.Last();
         }
 
-        private static int sundaySearch(byte[] bytes, uint start, uint end, byte[] sign)
+        private static List<uint> sundaySearch(byte[] bytes, uint start, uint end, byte[] sign)
         {
             int[] charstep = new int[256];
             for(int i=0;i<256;i++)
@@ -232,9 +258,10 @@ namespace PrOD_Editor
             }
             for(int i=0;i<sign.Length;i++)
             {
-                charstep[(int)sign[i]] = i;
+                charstep[sign[i]] = i;
             }
 
+            List<uint> ret = new List<uint>();
             for(uint i=start;i<end;)
             {
                 uint j = 0;
@@ -262,57 +289,19 @@ namespace PrOD_Editor
 
                 if(j==sign.Length)
                 {
-                    return (int)(i - sign.Length);
+                    ret.Add(i-j);
+                    i = i - j + 1;
                 }
             }
 
-            return -1;     
-        }
-
-        private static int search(byte[] bytes,uint start,uint end,byte[] sign)
-        {
-            for(uint i=start;i<end;i++)
-            {
-                int j = 0;
-                while(j<sign.Length)
-                {
-                    if (i + j >= end)
-                    {
-                        if (sign[j] != 0x00)
-                        {
-                            break;
-                        }
-                    }
-                    else
-                    {
-                        if (bytes[i + j] != sign[j])
-                        {
-                            break;
-                        }
-                    }
-                    j++;
-                }
-
-                if(j==sign.Length)
-                {
-                    return (int)i;
-                }
-            }
-            return -1;
+            return ret;     
         }
         
         private static uint calLength(byte[] bytes,uint findPos,uint curPos)
         {
             uint len = 3;
-            for(int index=3;index<0xFF+0x12;index++)
+            for(int index=3;index<0xFF+0x12&&curPos+index<bytes.Length;index++)
             {
-                if(findPos+index<curPos)
-                {
-                    if(curPos+index>=bytes.Length)
-                    {
-                        break;
-                    }
-
                     if(bytes[findPos+index]==bytes[curPos+index])
                     {
                         len++;
@@ -321,18 +310,6 @@ namespace PrOD_Editor
                     {
                         break;
                     }
-                }
-                else
-                {
-                    if(bytes[curPos+index]==0x00)
-                    {
-                        len++;
-                    }
-                    else
-                    {
-                        break;
-                    }
-                }
             }
             return len;
         }
